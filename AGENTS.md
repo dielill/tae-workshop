@@ -55,4 +55,5 @@ Siehe daten/DATEN.md.
 - Funktionen: Stütze, Träger/Riegel, Nebenträger/Pfette, Verband, Zugstab (Liste kann wachsen).
 - Ökobilanz nur nach Funktion gruppieren (nicht nach Material).
 - 3D: echte Querschnitte als Körper, nicht nur Linien.
-- Z-Achse in den Exporten zeigt nach unten (RFEM). Für die Anzeige umdrehen.
+- Bei Abweichungen zwischen Excel und Rhino gilt Rhino (Abweichung anzeigen).
+- Z-Achse: im Excel-Export nach unten (RFEM), in den .3dm nach oben. Anzeige: Z nach oben.
