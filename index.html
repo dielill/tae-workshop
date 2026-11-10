@@ -3,53 +3,177 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TAE Workshop</title>
+<title>Tragwerk Ökobilanz</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px 16px; background: #fff; color: #222; }
-  h1 { font-size: 1.8rem; margin: 0 0 8px; }
-  #info { color: #666; }
-  .fehler { color: #b00020; }
+  :root { --text:#1d2228; --muted:#5f6b76; --line:#d9dee3; --bg:#fff; --soft:#f4f6f8; --err:#b00020; --ok:#1b7f3b; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 20px 16px 60px; background: var(--bg); color: var(--text); line-height: 1.4; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 28px 0 8px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
+  h3 { font-size: 1rem; margin: 18px 0 6px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .err { color: var(--err); }
+  .ok { color: var(--ok); }
+  .scroll { overflow-x: auto; max-width: 100%; }
+  table { border-collapse: collapse; font-size: .85rem; margin: 4px 0 10px; }
+  th, td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; white-space: nowrap; }
+  th { background: var(--soft); }
+  tr.kopf td { background: var(--soft); font-weight: 600; }
+  details { margin: 6px 0; }
+  summary { cursor: pointer; font-weight: 600; }
 </style>
 </head>
 <body>
-<h1 id="ausgabe">Lade Daten …</h1>
-<p id="info">Quelle: daten/mengenliste/Mengenliste_Beispielprojekt.xlsx, Blatt „Daten“</p>
+<h1>Tragwerk → Ökobilanz</h1>
+<p class="muted">Schritt 1: Dateien laden und Struktur zeigen. Noch keine Berechnung.</p>
+<p id="status">Lade Bibliotheken …</p>
+<div id="inhalt"></div>
 
 <script>
 (function () {
-  var DATEI = 'daten/mengenliste/Mengenliste_Beispielprojekt.xlsx';
-  var ausgabe = document.getElementById('ausgabe');
+  var ORDNER = 'daten/tragwerksmodell/';
+  var MODELLE = ['stahlbau', 'holzbau', 'betonbau'];
+  var SHEETJS_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+  var RHINO_BASIS = 'https://cdn.jsdelivr.net/npm/rhino3dm@8.4.0/';
 
-  function fehler(text) {
-    ausgabe.textContent = 'Fehler: ' + text;
-    ausgabe.className = 'fehler';
+  var statusEl = document.getElementById('status');
+  var inhalt = document.getElementById('inhalt');
+
+  // ---------- Hilfen ----------
+  function el(tag, attrs, kinder) {
+    var e = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (k === 'text') e.textContent = attrs[k];
+      else if (k === 'class') e.className = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    }
+    (kinder || []).forEach(function (c) { if (c) e.appendChild(c); });
+    return e;
+  }
+  function zelle(v) { return (v === undefined || v === null) ? '' : String(v); }
+  function tabelle(kopf, zeilen, kopfZeilen) {
+    var t = el('table');
+    if (kopf) t.appendChild(el('tr', null, kopf.map(function (h) { return el('th', { text: h }); })));
+    zeilen.forEach(function (z, i) {
+      t.appendChild(el('tr', { class: (kopfZeilen && i < kopfZeilen) ? 'kopf' : '' },
+        z.map(function (v) { return el('td', { text: zelle(v) }); })));
+    });
+    return el('div', { class: 'scroll' }, [t]);
+  }
+  function ladeSkript(url) {
+    return new Promise(function (ok, fehler) {
+      var s = document.createElement('script');
+      s.src = url;
+      s.onload = ok;
+      s.onerror = function () { fehler(new Error('Skript nicht geladen: ' + url)); };
+      document.head.appendChild(s);
+    });
+  }
+  function ladeDatei(pfad) {
+    return fetch(pfad).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' für ' + pfad);
+      return r.arrayBuffer();
+    });
+  }
+  function zaehle(liste) {
+    var m = {};
+    liste.forEach(function (v) { m[v] = (m[v] || 0) + 1; });
+    return Object.keys(m).map(function (k) { return [k, m[k]]; });
   }
 
-  // SheetJS nachladen (kein <script src>, siehe CLAUDE.md)
-  var s = document.createElement('script');
-  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
-  s.onload = start;
-  s.onerror = function () { fehler('SheetJS konnte nicht geladen werden.'); };
-  document.head.appendChild(s);
-
-  function start() {
-    fetch(DATEI)
-      .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status + ' für ' + DATEI);
-        return r.arrayBuffer();
-      })
-      .then(function (buf) {
-        var wb = XLSX.read(buf, { type: 'array' });
-        var blatt = wb.Sheets['Daten'] || wb.Sheets[wb.SheetNames[0]];
-        var zeilen = XLSX.utils.sheet_to_json(blatt, { header: 1, blankrows: false, defval: '' });
-        // Titel, Hinweis, dann Kopfzeile „Pos.“; Daten danach
-        var kopf = zeilen.findIndex(function (z) { return z[0] === 'Pos.'; });
-        if (kopf < 0) throw new Error('Kopfzeile „Pos.“ nicht gefunden.');
-        var daten = zeilen.slice(kopf + 1);
-        ausgabe.textContent = 'Hallo Esslingen: ' + daten.length + ' Zeilen';
-      })
-      .catch(function (e) { fehler(e.message); });
+  // ---------- Excel-Export: Struktur je Blatt ----------
+  function zeigeExcel(name, buf, ziel) {
+    var wb = XLSX.read(buf, { type: 'array' });
+    ziel.appendChild(el('h3', { text: 'Excel: TAE_' + name + '_Export.xlsx (' + wb.SheetNames.length + ' Blätter)' }));
+    wb.SheetNames.forEach(function (blattName) {
+      var zeilen = XLSX.utils.sheet_to_json(wb.Sheets[blattName], { header: 1, defval: '' });
+      var datenZeilen = zeilen.slice(3).filter(function (z) {
+        return z.some(function (c) { return c !== ''; });
+      });
+      var d = el('details');
+      d.appendChild(el('summary', { text: blattName + ': ' + datenZeilen.length + ' Datenzeilen, ' + (zeilen[1] || []).length + ' Spalten' }));
+      d.appendChild(el('p', { class: 'muted', text: 'Zeile 1 (Titel): ' + zelle(zeilen[0] && zeilen[0][0]) + '. Zeilen 2 und 3: Kopf (grau). Danach die ersten 3 Datenzeilen.' }));
+      d.appendChild(tabelle(null, zeilen.slice(1, 3).concat(datenZeilen.slice(0, 3)), 2));
+      ziel.appendChild(d);
+    });
   }
+
+  // ---------- Rhino: Objekte, Layer, User-Text-Schlüssel ----------
+  function zeigeRhino(name, buf, rhino, ziel) {
+    var datei = rhino.File3dm.fromByteArray(new Uint8Array(buf));
+    if (!datei) throw new Error('3dm nicht lesbar: ' + name);
+    var objekte = datei.objects();
+    var anzahl = objekte.count;
+    var layerNamen = [];
+    for (var i = 0; i < datei.layers().count; i++) layerNamen.push(datei.layers().get(i).name);
+
+    var geoTypen = [], schluesselListe = [], werte = {}, beispiel = null;
+    for (var j = 0; j < anzahl; j++) {
+      var o = objekte.get(j);
+      var geo = o.geometry();
+      geoTypen.push(geo.constructor.name || geo.objectType);
+      var ut = o.attributes().getUserStrings(); // [[schluessel, wert], ...]
+      if (!beispiel) beispiel = ut;
+      ut.forEach(function (paar) {
+        schluesselListe.push(paar[0]);
+        (werte[paar[0]] = werte[paar[0]] || []).push(paar[1]);
+      });
+    }
+
+    var einheit = datei.settings().modelUnitSystem;
+    ziel.appendChild(el('h3', { text: 'Rhino: TAE_' + name + '.3dm' }));
+    var einheitText = (einheit === rhino.UnitSystem.Meters) ? 'Meter' : 'NICHT Meter (prüfen!)';
+    ziel.appendChild(el('p', { text: anzahl + ' Objekte, Modelleinheit: ' + einheitText + ', Geometrie: ' +
+      zaehle(geoTypen).map(function (p) { return p[0] + ' × ' + p[1]; }).join(', ') }));
+    ziel.appendChild(el('p', { text: 'Layer (' + layerNamen.length + '): ' + layerNamen.join(', ') }));
+
+    var d = el('details');
+    d.appendChild(el('summary', { text: 'User-Text-Schlüssel: ' + Object.keys(werte).length }));
+    d.appendChild(tabelle(['Schlüssel', 'an Objekten', 'verschiedene Werte', 'Werte (Anzahl), max. 6'],
+      zaehle(schluesselListe).map(function (p) {
+        var vs = zaehle(werte[p[0]]);
+        return [p[0], p[1] + ' von ' + anzahl, vs.length,
+          vs.slice(0, 6).map(function (v) { return v[0] + ' (' + v[1] + ')'; }).join('; ') + (vs.length > 6 ? ' …' : '')];
+      })));
+    ziel.appendChild(d);
+    if (beispiel) {
+      var b = el('details');
+      b.appendChild(el('summary', { text: 'Beispiel: erstes Objekt' }));
+      b.appendChild(tabelle(['Schlüssel', 'Wert'], beispiel));
+      ziel.appendChild(b);
+    }
+  }
+
+  // ---------- Ablauf ----------
+  Promise.all([
+    ladeSkript(SHEETJS_URL),
+    ladeSkript(RHINO_BASIS + 'rhino3dm.min.js')
+  ]).then(function () {
+    statusEl.textContent = 'Lade rhino3dm (WebAssembly) …';
+    return rhino3dm({ locateFile: function (f) { return RHINO_BASIS + f; } });
+  }).then(function (rhino) {
+    statusEl.textContent = 'Lade Modelldateien …';
+    return Promise.all(MODELLE.map(function (name) {
+      var abschnitt = el('section');
+      abschnitt.appendChild(el('h2', { text: 'Modell: ' + name }));
+      var teilExcel = el('div'), teilRhino = el('div');
+      abschnitt.appendChild(teilExcel);
+      abschnitt.appendChild(teilRhino);
+      inhalt.appendChild(abschnitt);
+      return Promise.all([
+        ladeDatei(ORDNER + 'TAE_' + name + '_Export.xlsx').then(function (buf) { zeigeExcel(name, buf, teilExcel); }),
+        ladeDatei(ORDNER + 'TAE_' + name + '.3dm').then(function (buf) { zeigeRhino(name, buf, rhino, teilRhino); })
+      ]).catch(function (e) {
+        abschnitt.appendChild(el('p', { class: 'err', text: 'Fehler: ' + e.message }));
+        throw e;
+      });
+    }));
+  }).then(function () {
+    statusEl.textContent = 'Alle 6 Dateien geladen.';
+    statusEl.className = 'ok';
+  }).catch(function (e) {
+    statusEl.textContent = 'Fehler: ' + e.message;
+    statusEl.className = 'err';
+  });
 })();
 </script>
 </body>
